@@ -7,6 +7,7 @@ A Python script that lists Amazon SQS queues containing messages and updates the
 - Lists all SQS queues with at least one message.
 - Displays the number of messages in each queue.
 - Optionally includes messages in flight (being processed) in the count.
+- Filters queues by name using regex patterns.
 - Provides direct links to the AWS SQS console for each queue.
 - Supports periodic updates to refresh the displayed information.
 - Configurable number of worker threads for fetching queue information.
@@ -41,9 +42,15 @@ You can run the script directly from the command line. Here are some usage examp
 
    sqs-list-filled-queues --workers 8
 
-- To combine options (watch with in-flight messages):
+- To filter queues by name pattern (case-insensitive regex):
 
-   sqs-list-filled-queues --watch 30 --include-in-flight
+   sqs-list-filled-queues --pattern "prod"
+   sqs-list-filled-queues --pattern "^test-"
+   sqs-list-filled-queues --pattern "queue$"
+
+- To combine options (watch with in-flight messages and pattern filtering):
+
+   sqs-list-filled-queues --watch 30 --include-in-flight --pattern "production"
 
 ### Exit Codes
 
@@ -54,6 +61,17 @@ You can run the script directly from the command line. Here are some usage examp
 
 - Press `R` to force a refresh.
 - Press `Q` to quit the program.
+
+### Pattern Filtering
+
+The `--pattern` option allows you to filter queues by name using regular expressions. The pattern is applied to the queue name only (not the full URL) and is case-insensitive.
+
+Examples:
+
+- `--pattern "test"` - matches queues containing "test" anywhere in the name
+- `--pattern "^prod-"` - matches queues starting with "prod-"
+- `--pattern "queue$"` - matches queues ending with "queue"
+- `--pattern "(dev|test|staging)"` - matches queues containing "dev", "test", or "staging"
 
 ## Example Output
 
@@ -72,6 +90,15 @@ You can run the script directly from the command line. Here are some usage examp
         https://console.aws.amazon.com/sqs/v2/home?region=us-west-2#/queues/QueueName1
     QueueName2:  5 msgs, 0 in-flight,  5 total
         https://console.aws.amazon.com/sqs/v2/home?region=us-west-2#/queues/QueueName2
+
+### With pattern filtering (--pattern "prod")
+
+    Reading list of queues...Filtered 10 queues to 3 matching pattern 'prod'
+    Processed 3 out of 3 queues...
+    production-queue: 25 msgs
+        https://console.aws.amazon.com/sqs/v2/home?region=us-west-2#/queues/production-queue
+    user-actions-prod:  8 msgs
+        https://console.aws.amazon.com/sqs/v2/home?region=us-west-2#/queues/user-actions-prod
 
 ## License
 

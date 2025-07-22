@@ -3,6 +3,7 @@ import boto3
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
+import re
 import select
 import sys
 import termios
@@ -18,7 +19,7 @@ def check_queue(queue_url, include_in_flight=False):
         attribute_names = ['ApproximateNumberOfMessages']
         if include_in_flight:
             attribute_names.append('ApproximateNumberOfMessagesNotVisible')
-        
+
         response = sqs.get_queue_attributes(
             QueueUrl=queue_url,
             AttributeNames=attribute_names
@@ -26,12 +27,12 @@ def check_queue(queue_url, include_in_flight=False):
     except sqs.exceptions.QueueDoesNotExist:
         # Ignore the queue if it does not exist
         return
-    
+
     message_count = int(response['Attributes']['ApproximateNumberOfMessages'])
     in_flight_count = 0
     if include_in_flight:
         in_flight_count = int(response['Attributes'].get('ApproximateNumberOfMessagesNotVisible', 0))
-    
+
     total_count = message_count + in_flight_count
 
     if total_count:
@@ -46,7 +47,7 @@ def display_results(results, include_in_flight=False):
     session = boto3.session.Session()
     current_region = session.region_name
     console_link = f"https://console.aws.amazon.com/sqs/v2/home?region={current_region}"
-    
+
     displayable_results = []
     for result in results:
         message_count, in_flight_count, queue_url = result
@@ -54,7 +55,7 @@ def display_results(results, include_in_flight=False):
         link = f"{console_link}#/queues/{urllib.parse.quote(queue_url, safe='')}"
         total_count = message_count + in_flight_count
         displayable_results.append((base_name, message_count, in_flight_count, total_count, link))
-    
+
     sorted_display_results = sorted(displayable_results, key=lambda x: (-x[3], x[0]))  # Sort by total count desc, then name
     clear_line()
     if results:
@@ -62,11 +63,11 @@ def display_results(results, include_in_flight=False):
         max_message_count_length = len(str(max(result[1] for result in sorted_display_results)))
         max_in_flight_length = len(str(max(result[2] for result in sorted_display_results))) if include_in_flight else 0
         max_total_length = len(str(max(result[3] for result in sorted_display_results)))
-        
+
         for base_name, message_count, in_flight_count, total_count, console_link in sorted_display_results:
             display_name = base_name.ljust(max_base_name_length)
             display_count = str(message_count).rjust(max_message_count_length)
-            
+
             if include_in_flight:
                 display_in_flight = str(in_flight_count).rjust(max_in_flight_length)
                 display_total = str(total_count).rjust(max_total_length)
@@ -122,13 +123,34 @@ def quit():
     print(f"{BOLD}{GREEN}Program terminated by user.{RESET}")
     sys.exit(0)
 
+def filter_queues_by_pattern(queue_urls, pattern):
+    """Filter queue URLs by regex pattern applied to queue names."""
+    if not pattern:
+        return queue_urls
+
+    try:
+        regex = re.compile(pattern, re.IGNORECASE)
+    except re.error as e:
+        print(f"Error: Invalid regex pattern '{pattern}': {e}")
+        sys.exit(1)
+
+    filtered_urls = []
+    for url in queue_urls:
+        queue_name = url.split('/')[-1]  # Extract queue name from URL
+        if regex.search(queue_name):
+            filtered_urls.append(url)
+
+    return filtered_urls
+
 def main():
     parser = argparse.ArgumentParser(description="List SQS queues that have at least one message and update periodically.")
     parser.add_argument('-w', '--watch', nargs="?", const=60, type=int, metavar='n',
                         help="Update every [n] seconds. Default is 60 seconds if no value is provided.")
     parser.add_argument('-t', '--workers', type=int, default=4, help="Number of thread workers for fetching queue info. Default is 4.")
-    parser.add_argument('-f', '--include-in-flight', action='store_true', 
+    parser.add_argument('-f', '--include-in-flight', action='store_true',
                         help="Include messages in flight (being processed) in the count.")
+    parser.add_argument('-p', '--pattern', type=str, metavar='REGEX',
+                        help="Filter queues by name using a regex pattern (searches queue name, not full URL).")
     args = parser.parse_args()
 
     try:
@@ -136,6 +158,15 @@ def main():
         # List all queues
         response = sqs.list_queues()
         queue_urls = response.get('QueueUrls', [])
+
+        # Filter queues by pattern if provided
+        if args.pattern:
+            original_count = len(queue_urls)
+            queue_urls = filter_queues_by_pattern(queue_urls, args.pattern)
+            filtered_count = len(queue_urls)
+            clear_line()
+            print(f"Filtered {original_count} queues to {filtered_count} matching pattern '{args.pattern}'")
+
         if args.watch is None:
             results = get_queue_infos(queue_urls, args.workers, args.include_in_flight)
             display_results(results, args.include_in_flight)
