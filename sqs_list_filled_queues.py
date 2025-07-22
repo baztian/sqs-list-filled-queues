@@ -12,61 +12,85 @@ import argparse
 # Initialize boto3 client
 sqs = boto3.client('sqs')
 
-def check_queue(queue_url):
+def check_queue(queue_url, include_in_flight=False):
     # Get the approximate number of messages in the queue
     try:
+        attribute_names = ['ApproximateNumberOfMessages']
+        if include_in_flight:
+            attribute_names.append('ApproximateNumberOfMessagesNotVisible')
+        
         response = sqs.get_queue_attributes(
             QueueUrl=queue_url,
-            AttributeNames=['ApproximateNumberOfMessages']
+            AttributeNames=attribute_names
         )
     except sqs.exceptions.QueueDoesNotExist:
         # Ignore the queue if it does not exist
         return
+    
     message_count = int(response['Attributes']['ApproximateNumberOfMessages'])
+    in_flight_count = 0
+    if include_in_flight:
+        in_flight_count = int(response['Attributes'].get('ApproximateNumberOfMessagesNotVisible', 0))
+    
+    total_count = message_count + in_flight_count
 
-    if message_count:
-        return (message_count, queue_url)
+    if total_count:
+        return (message_count, in_flight_count, queue_url)
 
 # ANSI escape codes for styles
 BOLD = "\033[1m"
 GREEN = "\033[92m"
 RESET = "\033[0m"
 
-def display_results(results):
+def display_results(results, include_in_flight=False):
     session = boto3.session.Session()
     current_region = session.region_name
     console_link = f"https://console.aws.amazon.com/sqs/v2/home?region={current_region}"
-    displayable_results = [
-        (queue_url.split('/')[-1], message_count, f"{console_link}#/queues/{urllib.parse.quote(queue_url, safe='')}")
-        for message_count, queue_url in results
-    ]
-    sorted_display_results = sorted(displayable_results, key=lambda x: (-x[1], x[0]))
+    
+    displayable_results = []
+    for result in results:
+        message_count, in_flight_count, queue_url = result
+        base_name = queue_url.split('/')[-1]
+        link = f"{console_link}#/queues/{urllib.parse.quote(queue_url, safe='')}"
+        total_count = message_count + in_flight_count
+        displayable_results.append((base_name, message_count, in_flight_count, total_count, link))
+    
+    sorted_display_results = sorted(displayable_results, key=lambda x: (-x[3], x[0]))  # Sort by total count desc, then name
     clear_line()
     if results:
         max_base_name_length = max(len(result[0]) for result in sorted_display_results)
         max_message_count_length = len(str(max(result[1] for result in sorted_display_results)))
-        for base_name, message_count, console_link in sorted_display_results:
+        max_in_flight_length = len(str(max(result[2] for result in sorted_display_results))) if include_in_flight else 0
+        max_total_length = len(str(max(result[3] for result in sorted_display_results)))
+        
+        for base_name, message_count, in_flight_count, total_count, console_link in sorted_display_results:
             display_name = base_name.ljust(max_base_name_length)
             display_count = str(message_count).rjust(max_message_count_length)
-            print(f"{BOLD}{display_name}{RESET}: {GREEN}{display_count} msgs{RESET}\n    {console_link}")
+            
+            if include_in_flight:
+                display_in_flight = str(in_flight_count).rjust(max_in_flight_length)
+                display_total = str(total_count).rjust(max_total_length)
+                print(f"{BOLD}{display_name}{RESET}: {GREEN}{display_count} msgs{RESET}, {GREEN}{display_in_flight} in-flight{RESET}, {GREEN}{display_total} total{RESET}\n    {console_link}")
+            else:
+                print(f"{BOLD}{display_name}{RESET}: {GREEN}{display_count} msgs{RESET}\n    {console_link}")
     else:
         print(f"{BOLD}No messages found in any queue.{RESET}")
 
 def clear_line():
     print("\r" + " " * 60, end='\r')
 
-def get_queue_infos(queue_urls, workers):
+def get_queue_infos(queue_urls, workers, include_in_flight=False):
     total_queues = len(queue_urls)
     results = []
     # Use ThreadPoolExecutor to check queues in parallel
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(check_queue, url) for url in queue_urls]
+        futures = [executor.submit(check_queue, url, include_in_flight) for url in queue_urls]
         processed_queues = 0
         for future in as_completed(futures):
             processed_queues += 1
             print(f"\rProcessed {BOLD}{processed_queues}{RESET} out of {BOLD}{total_queues}{RESET} queues...", end='', flush=True)
             result = future.result()
-            if result:  # Ensure the queue had more than 1 message
+            if result:  # Ensure the queue had more than 0 messages (including in-flight)
                 results.append(result)
     return results
 
@@ -103,6 +127,8 @@ def main():
     parser.add_argument('-w', '--watch', nargs="?", const=60, type=int, metavar='n',
                         help="Update every [n] seconds. Default is 60 seconds if no value is provided.")
     parser.add_argument('-t', '--workers', type=int, default=4, help="Number of thread workers for fetching queue info. Default is 4.")
+    parser.add_argument('-f', '--include-in-flight', action='store_true', 
+                        help="Include messages in flight (being processed) in the count.")
     args = parser.parse_args()
 
     try:
@@ -111,13 +137,16 @@ def main():
         response = sqs.list_queues()
         queue_urls = response.get('QueueUrls', [])
         if args.watch is None:
-            results = get_queue_infos(queue_urls, args.workers)
-            display_results(results)
+            results = get_queue_infos(queue_urls, args.workers, args.include_in_flight)
+            display_results(results, args.include_in_flight)
+            # Exit with error code 1 if any messages were found
+            if results:
+                sys.exit(1)
             return
         while True:
-            results = get_queue_infos(queue_urls, args.workers)
+            results = get_queue_infos(queue_urls, args.workers, args.include_in_flight)
             os.system('clear' if os.name == 'posix' else 'cls')  # Clear the console
-            display_results(results)
+            display_results(results, args.include_in_flight)
             if countdown(args.watch):
                 continue
     except KeyboardInterrupt:
