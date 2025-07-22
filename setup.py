@@ -7,7 +7,7 @@ def read_readme():
 
 setup(
     name='sqs-list-filled-queues',
-    version='0.2',
+    version='0.3',
     description="A Python script to monitor and list Amazon SQS " \
     "queues with messages, featuring real-time updates and AWS console links.",
     long_description=read_readme(),

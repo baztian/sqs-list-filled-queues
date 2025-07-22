@@ -10,11 +10,9 @@ import termios
 import tty
 import argparse
 
-# Initialize boto3 client
 sqs = boto3.client('sqs')
 
 def check_queue(queue_url, include_in_flight=False):
-    # Get the approximate number of messages in the queue
     try:
         attribute_names = ['ApproximateNumberOfMessages']
         if include_in_flight:
@@ -83,7 +81,6 @@ def clear_line():
 def get_queue_infos(queue_urls, workers, include_in_flight=False):
     total_queues = len(queue_urls)
     results = []
-    # Use ThreadPoolExecutor to check queues in parallel
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(check_queue, url, include_in_flight) for url in queue_urls]
         processed_queues = 0
@@ -91,7 +88,7 @@ def get_queue_infos(queue_urls, workers, include_in_flight=False):
             processed_queues += 1
             print(f"\rProcessed {BOLD}{processed_queues}{RESET} out of {BOLD}{total_queues}{RESET} queues...", end='', flush=True)
             result = future.result()
-            if result:  # Ensure the queue had more than 0 messages (including in-flight)
+            if result:
                 results.append(result)
     return results
 
@@ -103,7 +100,6 @@ def countdown(duration):
     try:
         for i in range(duration, 0, -1):
             print(f"\rRefresh in {str(i).rjust(duration_len)} seconds (press 'R' to force refresh)", end='', flush=True)
-            # time.sleep(1)
             rlist, _, _ = select.select([sys.stdin], [], [], 1)
             if rlist:
                 key = sys.stdin.read(1).lower()
@@ -113,7 +109,6 @@ def countdown(duration):
                 elif key == 'q':
                     quit()
             else:
-                # No input, continue countdown
                 continue
     finally:
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, original_settings)
@@ -155,11 +150,9 @@ def main():
 
     try:
         print("Reading list of queues...", end='', flush=True)
-        # List all queues
         response = sqs.list_queues()
         queue_urls = response.get('QueueUrls', [])
 
-        # Filter queues by pattern if provided
         if args.pattern:
             original_count = len(queue_urls)
             queue_urls = filter_queues_by_pattern(queue_urls, args.pattern)
@@ -176,7 +169,7 @@ def main():
             return
         while True:
             results = get_queue_infos(queue_urls, args.workers, args.include_in_flight)
-            os.system('clear' if os.name == 'posix' else 'cls')  # Clear the console
+            os.system('clear' if os.name == 'posix' else 'cls')
             display_results(results, args.include_in_flight)
             if countdown(args.watch):
                 continue
